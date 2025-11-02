@@ -23,7 +23,7 @@ private:
     std::string execute_command(const std::string& received_data);
 
     // 设置非阻塞连接
-    int TcpServer::set_nonblocking(int fd);
+    int set_nonblocking(int fd);
 
     // 处理客户端连接
     void handle_client(int client_socket);
@@ -48,4 +48,5 @@ public:
 };
 
 #endif // TCP_SERVER_H
+
 
