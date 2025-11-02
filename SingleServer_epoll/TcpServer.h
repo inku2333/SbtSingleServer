@@ -6,6 +6,7 @@
 #include <netinet/in.h>
 #include <ctime>
 #include <vector>
+#include <fcntl.h>
 
 class TcpServer {
 private:
@@ -47,3 +48,4 @@ public:
 };
 
 #endif // TCP_SERVER_H
+
