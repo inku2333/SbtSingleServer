@@ -48,6 +48,14 @@ bool TcpServer::init() {
         return false;
     }
 
+    // 设为非阻塞
+    if (set_nonblocking(server_fd_) < 0) {
+        std::cerr << "Error: set nonblocking failed" << std::endl;
+        close(server_fd_);
+        server_fd_ = -1;
+        return false;
+    }
+
     // 设置socket选项，允许端口重用
     int opt = 1;
     if (setsockopt(server_fd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
@@ -138,8 +146,15 @@ std::string TcpServer::execute_command(const std::string& received_data) {
 // 新增工具函数：设置socket为非阻塞
 int TcpServer::set_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
-    if (flags < 0) { perror("fcntl F_GETFL"); return -1; }
-    return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    if (flags < 0) {
+        std::cerr << "Error: fcntl F_GETFL failed" << std::endl;
+        return -1;
+    }
+    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+        std::cerr << "Error: fcntl F_SETFL O_NONBLOCK failed" << std::endl;
+        return -1;
+    }
+    return 0;
 }
 
 // 处理客户端连接
@@ -210,7 +225,7 @@ void TcpServer::start() {
         return;
     }
 
-    const int MAX_EVENTS = 10;  // 一次最多处理10个就绪事件
+    const int MAX_EVENTS = 1024;  // 一次最多处理1024个就绪事件
     struct epoll_event ready_events[MAX_EVENTS];  // 仅用于接收就绪事件
 
     while (true) {
@@ -226,28 +241,35 @@ void TcpServer::start() {
             if (ready_events[i].data.fd == server_fd_) {
                 struct sockaddr_in client_addr;
                 socklen_t client_len = sizeof(client_addr);
-                int new_socket = accept(server_fd_, (struct sockaddr*)&client_addr, &client_len);
-                if (new_socket < 0) {
-                    std::cerr << "Error: accept failed" << std::endl;
-                    continue;
-                }
+                while(true){ // 循环处理所有等待的连接
+                    int new_socket = accept(server_fd_, (struct sockaddr*)&client_addr, &client_len);
+                    if (new_socket < 0) {
+                        // 非阻塞模式下，无更多连接时返回EAGAIN，退出循环
+                        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                            std::cerr << "Error: errno == EAGAIN || errno == EWOULDBLOCK" << std::endl;
+                            break;
+                        } else {
+                            std::cerr << "Error: accept failed" << std::endl;
+                            break;
+                        }
+                    }
+                    // 打印新连接信息
+                    std::cout << "New connection from "
+                              << inet_ntoa(client_addr.sin_addr)
+                              << ":" << ntohs(client_addr.sin_port)
+                              << " (socket: " << new_socket << ")" << std::endl;
 
-                // 打印新连接信息
-                std::cout << "New connection from "
-                          << inet_ntoa(client_addr.sin_addr)
-                          << ":" << ntohs(client_addr.sin_port)
-                          << " (socket: " << new_socket << ")" << std::endl;
+                    // 将新连接加入客户端列表
+                    struct epoll_event client_epollfd;
+                    client_epollfd.data.fd = new_socket;
+                    client_epollfd.events = EPOLLIN;  // 关注读事件（客户端发数据）
 
-                // 将新连接加入客户端列表
-                struct epoll_event client_epollfd;
-                client_epollfd.data.fd = new_socket;
-                client_epollfd.events = EPOLLIN;  // 关注读事件（客户端发数据）
-
-                // 将新客户端socket添加到epoll实例
-                if (epoll_ctl(epfd, EPOLL_CTL_ADD, new_socket, &client_epollfd) < 0) {
-                    std::cerr << "Error: epoll_ctl add client_fd failed" << std::endl;
-                    close(new_socket);
-                    continue;
+                    // 将新客户端socket添加到epoll实例
+                    if (epoll_ctl(epfd, EPOLL_CTL_ADD, new_socket, &client_epollfd) < 0) {
+                        std::cerr << "Error: epoll_ctl add client_fd failed" << std::endl;
+                        close(new_socket);
+                        continue;
+                    }
                 }
             }
             else if(ready_events[i].events & (EPOLLIN | EPOLLERR | EPOLLHUP)){
